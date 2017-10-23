@@ -2713,6 +2713,8 @@ static void inversionRoutine(){
     cusolverDnCreate(&solver_handle);
     if(dat::misfit_type == 1){
         cufftPlan1d(&cufft_handle, nt, CUFFT_C2C, 1);
+    }
+    if(dat::optimize == 1){
         dat::lbfgs_used = 0;
     }
 
@@ -2831,28 +2833,35 @@ int main(int argc, const char *argv[]){
                 mkdir("output");
                 mkdir("output/0000");
                 if(sh){
-                    mat::write(dat::uy_forward, dat::nsfe, nx, nz, "output/0000/uy_forward.bin");
+                    mat::write(dat::uy_forward, dat::nsfe, nx, nz, "vy");
                 }
                 if(psv){
                     mat::write(dat::ux_forward, dat::nsfe, nx, nz, "output/0000/ux_forward.bin");
                     mat::write(dat::uz_forward, dat::nsfe, nx, nz, "output/0000/uz_forward.bin");
                 }
-                writeSU();
+                // writeSU();
                 break;
             }
             case 2:{
                 mkdir("output");
                 dat::output_path = "output";
                 clock_t timestart = clock();
+                if(dat::misfit_type == 1){
+                    cufftPlan1d(&cufft_handle, nt, CUFFT_C2C, 1);
+                }
                 prepareObs();
                 if(dat::obs_su){
                     printf("\n");
                 }
                 printf("\n");
                 loadModel(dat::model_init);
-                computeKernels();
+                float f = computeKernels();
+                dat::misfit_ref = f;
                 printf("\ntotal time: %.2fs\n",(float)(clock() - timestart) / CLOCKS_PER_SEC);
-                exportData(-1);
+                exportData(0);
+                if(dat::misfit_type == 1){
+                    cufftDestroy(cufft_handle);
+                }
                 break;
             }
             case 10:{
