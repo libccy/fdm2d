@@ -603,10 +603,12 @@ __global__ void addSTF(float **dsx, float **dsy, float **dsz, float **stf_x, flo
     }
 }
 __global__ void saveRec(float **out_x, float **out_y, float **out_z, float **vx, float **vy, float **vz,
-    int *rec_x_id, int *rec_z_id, int sh, int psv, int it){
+    int *rec_x_id, int *rec_z_id, int nx, int nt, int sh, int psv, int it){
     int ir = blockIdx.x;
-    int xr = rec_x_id[ir];
+    int xr = rec_x_id[ir] + threadIdx.x * nx;
     int zr = rec_z_id[ir];
+
+    it += threadIdx.x * nt;
     if(sh){
         out_y[ir][it] = vy[xr][zr];
     }
@@ -765,9 +767,9 @@ __global__ void getTaperWeights(float *tw, float dt, int nt){
         tw[it] = 1;
     }
 }
-__global__ void calculateMisfit(float *misfit, float **u_syn, float ***u_obs, float *tw, float dt, int isrc, int irec){
+__global__ void calculateMisfit(float *misfit, float **u_syn, float ***u_obs, float *tw, float dt, int isrc, int irec, int j, int nt){
     int it = blockIdx.x;
-    float wavedif = (u_syn[irec][it] - u_obs[isrc][irec][it]) * tw[it];
+    float wavedif = (u_syn[irec][it+j*nt] - u_obs[isrc+j][irec][it]) * tw[it];
     misfit[it] = wavedif * dt;
 }
 __global__ void envelopetmp(float *etmp, float *esyn, float *eobs, float max){
@@ -778,9 +780,9 @@ __global__ void copyWaveform(float *misfit, float ***u_obs, int isrc, int irec){
     int it = blockIdx.x;
     misfit[it] = u_obs[isrc][irec][it];
 }
-__global__ void copyWaveform(float *misfit, float **out, int irec){
+__global__ void copyWaveform(float *misfit, float **out, int irec, int jnt){
     int it = blockIdx.x;
-    misfit[it] = out[irec][it];
+    misfit[it] = out[irec][it+jnt];
 }
 __global__ void initialiseGrids(float **X, float **Z, float Lx, int nx, float Lz, int nz){
     devij;
@@ -1573,7 +1575,7 @@ static int importData(const char *datapath){
             dat::dvydx = mat::create(nx2, nz);
             dat::dvydz = mat::create(nx2, nz);
 
-            dat::out_y = mat::create(nrec * ntask, nt);
+            dat::out_y = mat::create(nrec, nt * ntask);
             dat::uy_forward = mat::createHost(dat::nsfe, nx2, nz);
             dat::vy_forward = mat::createHost(dat::nsfe, nx2, nz);
         }
@@ -1592,8 +1594,8 @@ static int importData(const char *datapath){
             dat::dvzdx = mat::create(nx2, nz);
             dat::dvzdz = mat::create(nx2, nz);
 
-            dat::out_x = mat::create(nrec * ntask, nt);
-            dat::out_z = mat::create(nrec * ntask, nt);
+            dat::out_x = mat::create(nrec, nt * ntask);
+            dat::out_z = mat::create(nrec, nt * ntask);
             dat::ux_forward = mat::createHost(dat::nsfe, nx2, nz);
             dat::uz_forward = mat::createHost(dat::nsfe, nx2, nz);
             dat::vx_forward = mat::createHost(dat::nsfe, nx2, nz);
@@ -2066,6 +2068,7 @@ static void initialiseKernels(){
 static void runWaveFieldPropagation(){
     initialiseDynamicFields();
 
+    int ntask2 = dat::isrc[1]-dat::isrc[0]+1;
     for(int it = 0; it < nt; it++){
         if(mode == 0){
             if((it + 1) % dat::sfe == 0){
@@ -2087,7 +2090,7 @@ static void runWaveFieldPropagation(){
             divSXZ<<<nxb2, nzt>>>(dat::dsx, dat::dsz, dat::sxx, dat::szz, dat::sxz, dat::X, dat::Z, nx, nz);
         }
         if(mode == 0){
-            addSTF<<<nsrc, dat::isrc[1]-dat::isrc[0]+1>>>(
+            addSTF<<<nsrc, ntask2>>>(
                 dat::dsx, dat::dsy, dat::dsz, dat::stf_x, dat::stf_y, dat::stf_z,
                 dat::src_x_id, dat::src_z_id, dat::isrc[0], sh, psv, it,nx
             );
@@ -2116,19 +2119,19 @@ static void runWaveFieldPropagation(){
         if(mode == 0){
             // next: saveRec type=1
             if(dat::obs_type == 0){
-                saveRec<<<nrec, 1>>>(
+                saveRec<<<nrec, ntask2>>>(
                     dat::out_x, dat::out_y, dat::out_z, dat::vx, dat::vy, dat::vz,
-                    dat::rec_x_id, dat::rec_z_id, sh, psv, it
+                    dat::rec_x_id, dat::rec_z_id, nx, nt, sh, psv, it
                 );
             }
             else if(dat::obs_type == 1){
-                saveRec<<<nrec, 1>>>(
+                saveRec<<<nrec, ntask2>>>(
                     dat::out_x, dat::out_y, dat::out_z, dat::ux, dat::uy, dat::uz,
-                    dat::rec_x_id, dat::rec_z_id, sh, psv, it
+                    dat::rec_x_id, dat::rec_z_id, nx, nt, sh, psv, it
                 );
             }
             else if(dat::obs_type == 2 && dat::isrc[0] >= 0){
-                saveRec<<<nrec, dat::isrc[1]-dat::isrc[0]+1>>>(
+                saveRec<<<nrec, ntask2>>>(
                     dat::u_obs_x, dat::u_obs_y, dat::u_obs_z, dat::ux, dat::uy, dat::uz,
                     dat::rec_x_id, dat::rec_z_id, dat::isrc[0], nx, sh, psv, it
                 );
@@ -2218,7 +2221,7 @@ static void prepareObs(){
     else{
         printf("Generating observed data\n");
         loadModel(dat::model_true);
-        for(int isrc = 0; isrc < nsrc; isrc += dat::ntask){
+        for(int isrc = 0; isrc < nsrc; isrc += ntask){
             runForward(isrc, getTaskIndex(isrc));
             for(int i=isrc; i<=getTaskIndex(isrc); i++){
                 printStat(i, nsrc);
@@ -2229,10 +2232,11 @@ static void prepareObs(){
     dat::obs_type = 1;
 }
 static float calculateEnvelopeMisfit(float **adstf, float *d_misfit, float **out, float ***u_obs,
-    cufftComplex *syn, cufftComplex *obs, float *esyn, float *eobs, float *ersd, float *etmp, float dt, int isrc, int irec){
-    copyWaveform<<<nt, 1>>>(d_misfit, u_obs, isrc, irec);
+    cufftComplex *syn, cufftComplex *obs, float *esyn, float *eobs, float *ersd, float *etmp,
+    float dt, int isrc, int irec, int j, int nt){
+    copyWaveform<<<nt, 1>>>(d_misfit, u_obs, isrc+j, irec);
     hilbert(d_misfit, obs);
-    copyWaveform<<<nt, 1>>>(d_misfit, out, irec);
+    copyWaveform<<<nt, 1>>>(d_misfit, out, irec, j*nt);
     hilbert(d_misfit, syn);
 
     copyC2Abs<<<nt, 1>>>(esyn, syn, nt);
@@ -2271,34 +2275,38 @@ static float computeKernelsAndMisfit(int kernel){
         printf("Computing gradient\n");
         initialiseKernels();
     }
-    for(int isrc = 0; isrc < nsrc; isrc+=dat::ntask){
-        runForward(isrc, isrc);
-        for(int irec = 0; irec < nrec; irec++){
-            if(dat::misfit_type == 1){
-                if(sh){
-                    misfit += calculateEnvelopeMisfit(dat::adstf_y, d_misfit, dat::out_y, dat::u_obs_y,
-                        syn, obs, esyn, eobs, ersd, etmp, dt, isrc, irec);
+    for(int isrc = 0; isrc < nsrc; isrc+=ntask){
+        int jsrc = getTaskIndex(isrc);
+        runForward(isrc, jsrc);
+        for(int j = 0; j <= jsrc - isrc; j++){
+            for(int irec = 0; irec < nrec; irec++){
+                if(dat::misfit_type == 1){
+                    if(sh){
+                        misfit += calculateEnvelopeMisfit(dat::adstf_y, d_misfit, dat::out_y, dat::u_obs_y,
+                            syn, obs, esyn, eobs, ersd, etmp, dt, isrc, irec, j, nt);
+                    }
+                    if(psv){
+                        misfit += calculateEnvelopeMisfit(dat::adstf_x, d_misfit, dat::out_x, dat::u_obs_x,
+                            syn, obs, esyn, eobs, ersd, etmp, dt, isrc, irec, j, nt);
+                        misfit += calculateEnvelopeMisfit(dat::adstf_z, d_misfit, dat::out_z, dat::u_obs_z,
+                            syn, obs, esyn, eobs, ersd, etmp, dt, isrc, irec, j, nt);
+                    }
                 }
-                if(psv){
-                    misfit += calculateEnvelopeMisfit(dat::adstf_x, d_misfit, dat::out_x, dat::u_obs_x,
-                        syn, obs, esyn, eobs, ersd, etmp, dt, isrc, irec);
-                    misfit += calculateEnvelopeMisfit(dat::adstf_z, d_misfit, dat::out_z, dat::u_obs_z,
-                        syn, obs, esyn, eobs, ersd, etmp, dt, isrc, irec);
-                }
-            }
-            else{
-                if(sh){
-                    calculateMisfit<<<nt, 1>>>(d_misfit, dat::out_y, dat::u_obs_y, dat::tw, sqrt(dt), isrc, irec);
-                    misfit += mat::norm(d_misfit, nt);
-                }
-                if(psv){
-                    calculateMisfit<<<nt, 1>>>(d_misfit, dat::out_x, dat::u_obs_x, dat::tw, sqrt(dt), isrc, irec);
-                    misfit += mat::norm(d_misfit, nt);
-                    calculateMisfit<<<nt, 1>>>(d_misfit, dat::out_z, dat::u_obs_z, dat::tw, sqrt(dt), isrc, irec);
-                    misfit += mat::norm(d_misfit, nt);
+                else{
+                    if(sh){
+                        calculateMisfit<<<nt, 1>>>(d_misfit, dat::out_y, dat::u_obs_y, dat::tw, sqrt(dt), isrc, irec, j, nt);
+                        misfit += mat::norm(d_misfit, nt);
+                    }
+                    if(psv){
+                        calculateMisfit<<<nt, 1>>>(d_misfit, dat::out_x, dat::u_obs_x, dat::tw, sqrt(dt), isrc, irec, j, nt);
+                        misfit += mat::norm(d_misfit, nt);
+                        calculateMisfit<<<nt, 1>>>(d_misfit, dat::out_z, dat::u_obs_z, dat::tw, sqrt(dt), isrc, irec, j, nt);
+                        misfit += mat::norm(d_misfit, nt);
+                    }
                 }
             }
         }
+
         if(kernel){
             if(dat::misfit_type != 1){
                 if(sh){
@@ -2856,21 +2864,28 @@ int main(int argc, const char *argv[]){
             case 1:{
                 loadModel(dat::model_init);
                 prepareSTF();
-                dat::ntask = 1;
-                runForward(-1, -1);
+                // dat::ntask = 1;
+                runForward(0, 3);
                 mkdir("output");
                 mkdir("output/0000");
                 if(sh){
-                    mat::write(dat::uy_forward, dat::nsfe, nx, nz, "vy");
+                    mat::write(dat::uy_forward, dat::nsfe, nx2, nz, "vy");
                 }
                 if(psv){
                     mat::write(dat::ux_forward, dat::nsfe, nx, nz, "output/0000/ux_forward.bin");
                     mat::write(dat::uz_forward, dat::nsfe, nx, nz, "output/0000/uz_forward.bin");
                 }
                 writeSU();
+
+                float **tmp=mat::createHost(nrec,nt*ntask);
+                mat::copyDeviceToHost(tmp,dat::out_y,nrec,nt*ntask);
+                mat::write(tmp[0], nt*ntask, "ux");
+                mat::write(tmp[3], nt*ntask, "uy");
                 break;
             }
             case 2:{
+                cublasCreate(&cublas_handle);
+                cusolverDnCreate(&solver_handle);
                 mkdir("output");
                 dat::output_path = "output";
                 clock_t timestart = clock();
@@ -2885,7 +2900,7 @@ int main(int argc, const char *argv[]){
                 loadModel(dat::model_init);
                 float f = computeKernels();
                 dat::misfit_ref = f;
-                printf("\ntotal time: %.2fs\n",(float)(clock() - timestart) / CLOCKS_PER_SEC);
+                printf("misfit = %f\ntotal time: %.2fs\n", f,(float)(clock() - timestart) / CLOCKS_PER_SEC);
                 exportData(0);
                 if(dat::misfit_type == 1){
                     cufftDestroy(cufft_handle);
