@@ -1,0 +1,35 @@
+simulation_mode                 = 0       # 0: inversion 1: forward 2: adjoint
+wave_propagation_type           = 0       # 0: sh 1: psv 2: both
+parametrisation                 = 1       # 0: lambda/mu 1: vp/vs
+misfit_type                     = 1       # 0: waveform 1: envelope
+obs_type                        = 1       # 0: v 1: u 2: u
+obs_su                          = 0       # read observed data from su file
+obs_su_path                     = trace   # folder containing su file
+ntask                           = 5       # run foward simultaneously
+
+model_init                      = model/homo_3500
+model_true                      = model/checker_4x4
+output_path                     = output
+
+nt                              = 5000
+dt                              = 0.06
+sfe                             = 10      # save wavefield every sfe timestep
+nsrc                            = 25      # number of sources
+
+absorb_bottom                   = 1
+absorb_right                    = 1
+absorb_top                      = 1
+absorb_left                     = 1
+absorb_width                    = 48000   # width of absorbing boundary
+
+optimize                        = 1       # 0: NLCG 1: LBFGS
+inv_maxiter                     = 0       # reset search direction periodicly
+inv_parameter                   = 1       # 0: lambda 1: mu 2: rho
+inv_iteration                   = 5       # maximum inversion iteration
+
+lbfgs_mem                       = 5       # size of lbfgs storage
+ls_steplenmax                   = 0.5     # maximum step length of line search
+ls_stepleninit                  = 0.05    # initial step length of line search
+ls_stepcountmax                 = 10      # maximum step count of line search
+ls_thresh                       = 1.2     # stop if |log(x/x0)| < log(thresh)
+filter_kernel                   = 5       # apply gaussian filter to kernel
