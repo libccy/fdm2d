@@ -53,7 +53,7 @@ namespace dat{
     int absorb_bottom;
     float absorb_width;
 
-    int isrc;
+    int *isrc;
     int nsrc;
     int nrec;
     int ntask;
@@ -592,13 +592,13 @@ __global__ void addSTF(float **dsx, float **dsy, float **dsz, float **stf_x, flo
     int zs = src_z_id[is];
 
     int is2 = threadIdx.x;
-    if(isrc < 0 || isrc == is+is2){
+    if(isrc < 0 || isrc + is2 == is){
         if(sh){
-            dsy[xs+is2*nx][zs] += stf_y[is+is2][it];
+            dsy[xs+is2*nx][zs] += stf_y[is][it];
         }
         if(psv){
-            dsx[xs+is2*nx][zs] += stf_x[is+is2][it];
-            dsz[xs+is2*nx][zs] += stf_z[is+is2][it];
+            dsx[xs+is2*nx][zs] += stf_x[is][it];
+            dsz[xs+is2*nx][zs] += stf_z[is][it];
         }
     }
 }
@@ -616,16 +616,18 @@ __global__ void saveRec(float **out_x, float **out_y, float **out_z, float **vx,
     }
 }
 __global__ void saveRec(float ***out_x, float ***out_y, float ***out_z, float **vx, float **vy, float **vz,
-    int *rec_x_id, int *rec_z_id, int isrc, int sh, int psv, int it){
+    int *rec_x_id, int *rec_z_id, int isrc, int nx, int sh, int psv, int it){
     int ir = blockIdx.x;
     int xr = rec_x_id[ir];
     int zr = rec_z_id[ir];
+
+    int is2 = threadIdx.x;
     if(sh){
-        out_y[isrc][ir][it] = vy[xr][zr];
+        out_y[isrc+is2][ir][it] = vy[xr+is2*nx][zr];
     }
     if(psv){
-        out_x[isrc][ir][it] = vx[xr][zr];
-        out_z[isrc][ir][it] = vz[xr][zr];
+        out_x[isrc+is2][ir][it] = vx[xr+is2*nx][zr];
+        out_z[isrc+is2][ir][it] = vz[xr+is2*nx][zr];
     }
 }
 __global__ void updateV(float **v, float **ds, float **rho, float **absbound, float dt){
@@ -914,6 +916,15 @@ __global__ void copyC2Abs(float *a, cufftComplex *b, int n){
     a[i] = sqrt(b[i].x*b[i].x + b[i].y*b[i].y) / n;
 }
 
+static int getTaskIndex(int isrc){
+    int index = isrc + ntask - 1;
+    if(index >= nsrc){
+        return nsrc - 1;
+    }
+    else{
+        return index;
+    }
+}
 static float calculateAngle(float **p, float **g, float k, int nx, int nz){
     float xx = mat::dot(p, p, nx, nz);
     float yy = mat::dot(g, g, nx, nz);
@@ -1541,6 +1552,7 @@ static int importData(const char *datapath){
         dat::nxb = dim3(nx, 1);
         dat::nxb2 = dim3(nx, ntask);
         dat::nzt = dim3(nz);
+        dat::isrc = mat::createIntHost(2);
 
         dat::X = mat::create(nx, nz);
         dat::Z = mat::create(nx, nz);
@@ -2031,19 +2043,19 @@ static void prepareSTF(){
 }
 static void initialiseDynamicFields(){
     if(sh){
-        mat::init(dat::vy, 0, nx, nz);
-        mat::init(dat::uy, 0, nx, nz);
-        mat::init(dat::sxy, 0, nx, nz);
-        mat::init(dat::szy, 0, nx, nz);
+        mat::init(dat::vy, 0, nx2, nz);
+        mat::init(dat::uy, 0, nx2, nz);
+        mat::init(dat::sxy, 0, nx2, nz);
+        mat::init(dat::szy, 0, nx2, nz);
     }
     if(psv){
-        mat::init(dat::vx, 0, nx, nz);
-        mat::init(dat::vz, 0, nx, nz);
-        mat::init(dat::ux, 0, nx, nz);
-        mat::init(dat::uz, 0, nx, nz);
-        mat::init(dat::sxx, 0, nx, nz);
-        mat::init(dat::szz, 0, nx, nz);
-        mat::init(dat::sxz, 0, nx, nz);
+        mat::init(dat::vx, 0, nx2, nz);
+        mat::init(dat::vz, 0, nx2, nz);
+        mat::init(dat::ux, 0, nx2, nz);
+        mat::init(dat::uz, 0, nx2, nz);
+        mat::init(dat::sxx, 0, nx2, nz);
+        mat::init(dat::szz, 0, nx2, nz);
+        mat::init(dat::sxz, 0, nx2, nz);
     }
 }
 static void initialiseKernels(){
@@ -2052,9 +2064,6 @@ static void initialiseKernels(){
     mat::init(dat::K_rho, 0, nx, nz);
 }
 static void runWaveFieldPropagation(){
-    if(ntask > 1){
-        dat::obs_type = 3;
-    }
     initialiseDynamicFields();
 
     for(int it = 0; it < nt; it++){
@@ -2078,9 +2087,9 @@ static void runWaveFieldPropagation(){
             divSXZ<<<nxb2, nzt>>>(dat::dsx, dat::dsz, dat::sxx, dat::szz, dat::sxz, dat::X, dat::Z, nx, nz);
         }
         if(mode == 0){
-            addSTF<<<nsrc, ntask>>>(
+            addSTF<<<nsrc, dat::isrc[1]-dat::isrc[0]+1>>>(
                 dat::dsx, dat::dsy, dat::dsz, dat::stf_x, dat::stf_y, dat::stf_z,
-                dat::src_x_id, dat::src_z_id, dat::isrc, sh, psv, it,nx
+                dat::src_x_id, dat::src_z_id, dat::isrc[0], sh, psv, it,nx
             );
         }
         else if(mode == 1){
@@ -2105,7 +2114,7 @@ static void runWaveFieldPropagation(){
             updateU<<<nxb2, nzt>>>(dat::uz, dat::vz, dt);
         }
         if(mode == 0){
-            // next: saveRec
+            // next: saveRec type=1
             if(dat::obs_type == 0){
                 saveRec<<<nrec, 1>>>(
                     dat::out_x, dat::out_y, dat::out_z, dat::vx, dat::vy, dat::vz,
@@ -2118,10 +2127,10 @@ static void runWaveFieldPropagation(){
                     dat::rec_x_id, dat::rec_z_id, sh, psv, it
                 );
             }
-            else if(dat::obs_type == 2 && dat::isrc >= 0){
-                saveRec<<<nrec, 1>>>(
+            else if(dat::obs_type == 2 && dat::isrc[0] >= 0){
+                saveRec<<<nrec, dat::isrc[1]-dat::isrc[0]+1>>>(
                     dat::u_obs_x, dat::u_obs_y, dat::u_obs_z, dat::ux, dat::uy, dat::uz,
-                    dat::rec_x_id, dat::rec_z_id, dat::isrc, sh, psv, it
+                    dat::rec_x_id, dat::rec_z_id, dat::isrc[0], nx, sh, psv, it
                 );
             }
             if((it + 1) % dat::sfe == 0){
@@ -2174,9 +2183,10 @@ static void runWaveFieldPropagation(){
         }
     }
 }
-static void runForward(int isrc){
+static void runForward(int isrc0, int isrc1){
     dat::simulation_mode = 0;
-    dat::isrc = isrc;
+    dat::isrc[0] = isrc0;
+    dat::isrc[1] = isrc1;
     runWaveFieldPropagation();
 }
 static void runAdjoint(int init_kernel){
@@ -2208,9 +2218,11 @@ static void prepareObs(){
     else{
         printf("Generating observed data\n");
         loadModel(dat::model_true);
-        for(int isrc = 0; isrc < nsrc; isrc++){
-            runForward(isrc);
-            printStat(isrc, nsrc);
+        for(int isrc = 0; isrc < nsrc; isrc += dat::ntask){
+            runForward(isrc, getTaskIndex(isrc));
+            for(int i=isrc; i<=getTaskIndex(isrc); i++){
+                printStat(i, nsrc);
+            }
         }
     }
     initialiseFilters();
@@ -2259,8 +2271,8 @@ static float computeKernelsAndMisfit(int kernel){
         printf("Computing gradient\n");
         initialiseKernels();
     }
-    for(int isrc = 0; isrc < nsrc; isrc++){
-        runForward(isrc);
+    for(int isrc = 0; isrc < nsrc; isrc+=dat::ntask){
+        runForward(isrc, isrc);
         for(int irec = 0; irec < nrec; irec++){
             if(dat::misfit_type == 1){
                 if(sh){
@@ -2844,17 +2856,18 @@ int main(int argc, const char *argv[]){
             case 1:{
                 loadModel(dat::model_init);
                 prepareSTF();
-                runForward(-1);
+                dat::ntask = 1;
+                runForward(-1, -1);
                 mkdir("output");
                 mkdir("output/0000");
                 if(sh){
-                    mat::write(dat::uy_forward, dat::nsfe, nx2, nz, "vy");
+                    mat::write(dat::uy_forward, dat::nsfe, nx, nz, "vy");
                 }
                 if(psv){
                     mat::write(dat::ux_forward, dat::nsfe, nx, nz, "output/0000/ux_forward.bin");
                     mat::write(dat::uz_forward, dat::nsfe, nx, nz, "output/0000/uz_forward.bin");
                 }
-                // writeSU();
+                writeSU();
                 break;
             }
             case 2:{
