@@ -2316,7 +2316,7 @@ static float computeKernelsAndMisfit(int kernel){
         }
     }
 
-    return misfit / dat::misfit_ref;
+    return misfit;
 }
 static float calculateMisfit(){
     return computeKernelsAndMisfit(0);
@@ -2676,21 +2676,21 @@ static void lineSearch(float **m, float **g, float **p, float f){
             alpha = calculateStep(step_count, step_len_max, &status);
         }
         if(step_count < 10){
-            fprintf(dat::log_ls, "  step 0%d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]);
-            printf("  step 0%d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]);
+            fprintf(dat::log_ls, "  step 0%d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]/dat::misfit_ref);
+            printf("  step 0%d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]/dat::misfit_ref);
         }
         else{
-            fprintf(dat::log_ls, "  step %d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]);
-            printf("  step %d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]);
+            fprintf(dat::log_ls, "  step %d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]/dat::misfit_ref);
+            printf("  step %d  misfit = %f\n", step_count, dat::func_vals[dat::ls_count-1]/dat::misfit_ref);
         }
         if(status > 0){
-            fprintf(dat::log_ls, "  alpha = %.2e\n\n", alpha);
+            fprintf(dat::log_ls, "  alpha = %.2e\n", alpha);
             printf("  alpha = %.2e\n", alpha);
             float angle =  calculateAngle(p, g, -1, nx, nz)*180/pi;
-            fprintf(dat::log_ls, "  angle = %f\n", angle);
+            fprintf(dat::log_ls, "  angle = %f\n\n", angle);
             printf("  angle = %f\n", angle);
             updateModel(m, p, alpha, alpha_old);
-            fprintf(dat::log_misfit, "%d %f\n", dat::neval, dat::func_vals[argmin(dat::func_vals, dat::ls_count)]);
+            fprintf(dat::log_misfit, "%d %f\n", dat::neval, dat::func_vals[argmin(dat::func_vals, dat::ls_count)]/dat::misfit_ref);
             return;
         }
         else if(status < 0){
@@ -2779,7 +2779,6 @@ static void inversionRoutine(){
         float f = computeKernels();
         if(iter == 0){
             dat::misfit_ref = f;
-            f = 1;
         }
         dat::neval += 2;
 
